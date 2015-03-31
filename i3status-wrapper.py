@@ -36,7 +36,7 @@ import re
 
 mpd_symbol = "♬"
 mpd_playing = mpd_symbol + "  %s"
-mpd_stopped = "&lt;" + mpd_symbol +"  stopped>"
+mpd_stopped = "<" + mpd_symbol +"  stopped>"
 
 vol_colour = "#6666FF"
 mpd_play_colour = "#AA5500"
