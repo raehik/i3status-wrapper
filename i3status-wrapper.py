@@ -1,132 +1,176 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 #
-# Insert more information into the i3status line.
+# Edit i3status's line.
 #
-# To use, ensure your i3status config (default '~/.i3status.conf')
-# contains:
-#
-#     output_format = "i3bar"
-#
-# in the 'general' section. Then in your i3 config (default
-# '~/.i3/config'):
-#
-#     status_command i3status | i3status-wrapper.py
-#
-# in the 'bar' section.
-#
-# Originally a Python rewrite of a Perl wrapper
-# (http://code.stapelberg.de/git/i3status/tree/contrib/wrapper.pl)
-# by Valentin Haenel, heavily adapted by me (raehik).
-#
-# © 2012 Valentin Haenel <valentin.haenel@gmx.de>
-# © 2014 Ben Orchard <thefirstmuffinman@gmail.com>
-#
-# This program is free software. It comes without any warranty, to the
-# extent permitted by applicable law. You can redistribute it and/or
-# modify it under the terms of the Do What The Fuck You Want To Public
-# License (WTFPL), Version 2, as published by Sam Hocevar. See
-# http://sam.zoy.org/wtfpl/COPYING for more details.
 
-import json
 import sys
-import subprocess
-import os
-import re
+from os.path import basename
+import json
 
-mpd_symbol = "♬"
-mpd_playing = mpd_symbol + "  %s"
-mpd_stopped = "<" + mpd_symbol +"  stopped>"
+from mpd import (MPDClient, CommandError, ConnectionError)
+from socket import error as SocketError
 
-vol_colour = "#6666FF"
-mpd_play_colour = "#AA5500"
-mpd_stop_colour = "#555555"
+class i3Wrapper:
+    BROWN = "#AA5500"
+    GREY = "#555555"
+    BLUE = "#6666FF"
 
-def run_command(arg_list):
-    """Run a command, returning the output and the error code."""
-    proc = subprocess.Popen(arg_list, stdout=subprocess.PIPE)
-    out, err = proc.communicate()
-    return out.decode("utf-8").strip()
+    host = "localhost"
+    port = "6600"
+    password = None
 
-def alsa_percent():
-    """Get the volume of the master ALSA device as a (mapped) percent."""
-    # -M: "Use the mapped volume for evaluating the percentage
-    #      representation like alsamixer, to be more natural for human
-    #      ear."
-    # whatever that means!
-    out = run_command(["amixer", "-M", "get", "Master"])
+    vol_pos = 0
+    vol_color = BLUE
 
-    p = re.compile("[0-9]*%")
-    percent = p.search(out)
-    return percent.group()
+    text_play = "♬  {artist}{name}"
+    color_play = BROWN
+    text_pause = text_play
+    color_pause = GREY
+    text_stop = "<♬  stopped>"
+    color_stop = GREY
+    text_off = "<♬  off>"
+    color_off = GREY
+    color_error = GREY
 
-def mpd_current_song():
-    """Get the current MPD song."""
-    song = ''
+    def __init__(self):
+        self.__init_statusline()
+        self.client = MPDClient()
 
-    artist = run_command(["mpc", "current", "-f", "%artist%"])
-    if artist != '':
-        song = artist + " - "
+    def __init_statusline(self):
+        # print first line (version header)
+        self.print_line(self.__next_line())
 
-    title = run_command(["mpc", "current", "-f", "%title%"])
-    if title == '':
-        title = os.path.basename(
-                  run_command(["mpc", "current", "-f","%file%"]))
+        # print second line (start of infinite array)
+        self.print_line(self.__next_line())
 
-    song += title
-    return song
+    def __next_line(self):
+        """Get the next line from stdin, respecting interrupts."""
+        # try to get the next line, exiting if cancelled
+        try:
+            line = sys.stdin.readline().strip()
+        except KeyboardInterrupt:
+            sys.exit(1)
 
-def print_line(message):
-    """Non-buffered printing to stdout."""
-    sys.stdout.write(message + '\n')
-    sys.stdout.flush()
-
-def read_line():
-    """Interrupted respecting reader for stdin."""
-    # try reading a line, removing any extra whitespace
-    try:
-        line = sys.stdin.readline().strip()
-        # i3status sends EOF, or an empty line
         if not line:
-            sys.exit(3)
+            # EOF or empty line received
+            sys.exit(2)
+
         return line
-    # exit on ctrl-c
-    except KeyboardInterrupt:
-        sys.exit()
 
-# Skip the first line which contains the version header.
-print_line(read_line())
+    def __mpd_connect(self):
+        """Try to connect to MPD."""
+        self.client.connect(host=self.host, port=self.port)
+        if self.password:
+            self.client.password(self.password)
 
-# The second line contains the start of the infinite array.
-print_line(read_line())
+    def mpd_status(self):
+        """Insert a part with info about MPD's current status."""
+        # try to get song & status info
+        try:
+            song = self.client.currentsong()
+            status = self.client.status()["state"]
+        except ConnectionError:
+            # not connected last call (e.g. MPD just started): try to
+            # connect again to figure out exact issue
+            try:
+                self.__mpd_connect()
+                song = self.client.currentsong()
+                status = self.client.status()["state"]
+            except SocketError:
+                # MPD isn't running or configuration was wrong -- assume
+                # off
+                self.insert_part(self.form_part(self.text_off, self.color_off))
+                return
+            except CommandError:
+                # TODO: likely triggered by incorrect password, but I
+                # dunno for sure
+                self.insert_part(self.form_part("MPD: failed to authenticate!", self.color_error))
+                return
 
-while True:
-    line, prefix = read_line(), ''
+        # get info about song (to use in formatting)
+        info = {}
+        info["file"] = basename(song["file"])
 
-    # ignore lines starting with a comma (see docs)
-    if line.startswith(','):
-        line, prefix = line[1:], ','
+        try:
+            info["artist"] = song["artist"] + " - "
+        except KeyError:
+            # song has no artist set, so none
+            info["artist"] = ""
 
-    # grab the line in json format
-    j = json.loads(line)
+        try:
+            info["title"] = song["title"]
+            info["name"] = song["title"]
+        except KeyError:
+            # song has no title set, so use filename instead
+            info["title"] = ""
+            info["name"] = info["file"]
 
-    j.insert(0,
-        {'full_text': alsa_percent(),
-         'color': vol_colour})
+        # set colour & format based on MPD status
+        if status == "play":
+            text = self.text_play
+            color = self.color_play
+        elif status == "pause":
+            text = self.text_pause
+            color = self.color_pause
+        elif status == "stop":
+            text = self.text_stop
+            color = self.color_stop
 
-    song = mpd_current_song()
+        # replace format parts with actual values
+        # e.g. {artist} -> info["artist"]
+        for key, value in info.items():
+            text = text.replace("{" + key + "}", value)
 
-    # insert information into the start of the json, but could be anywhere
-    if song == '':
-        j.insert(0,
-            {'full_text': mpd_stopped,
-             'color': mpd_stop_colour})
-    else:
-        j.insert(0,
-            {'full_text': mpd_playing % song,
-             'color': mpd_play_colour})
+        part = self.form_part(text, color)
+        self.insert_part(part)
 
-    #j[-1]['color'] = '#888888'
+    def alsa_color(self):
+        """Insert colour into the ALSA volume display part."""
+        self.line[self.vol_pos]["color"] = self.vol_color
 
-    # and echo back new encoded json
-    print_line(prefix+json.dumps(j))
+    def get_json(self):
+        line = self.__next_line()
+        prefix = ""
+
+        # ignore lines starting with a comma (see docs)
+        if line.startswith(","):
+            line = line[1:]
+            prefix = ","
+
+        j = json.loads(line)
+
+        return j, prefix
+
+    def form_part(self, text, color):
+        part = {}
+
+        part["full_text"] = text
+        part["color"] = color
+
+        return part
+
+    def insert_part(self, part, pos=0):
+        self.line.insert(pos, part)
+
+    def print_line(self, line):
+        """Print to stdout & flush the buffer."""
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    def start(self):
+        while True:
+            # get next line & parse it as JSON
+            self.line, prefix = self.get_json()
+
+            # run insertion methods
+            self.alsa_color()
+            self.mpd_status()
+
+            # print line
+            self.print_line(prefix + json.dumps(self.line))
+
+
+
+if __name__ == "__main__":
+    wrapper = i3Wrapper()
+    wrapper.start()
