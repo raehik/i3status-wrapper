@@ -17,7 +17,6 @@ class i3Wrapper:
 
     host = "localhost"
     port = "6600"
-    password = None
 
     vol_pos = 0
     vol_color = BLUE
@@ -33,10 +32,17 @@ class i3Wrapper:
     color_error = GREY
 
     def __init__(self):
+        """Initialise the wrapper."""
         self.__init_statusline()
-        self.client = MPDClient()
+        self.__mpd_connect()
+
+    def print_line(self, line):
+        """Print to stdout & flush the buffer."""
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
 
     def __init_statusline(self):
+        """Get the header lines from i3status out of the way."""
         # print first line (version header)
         self.print_line(self.__next_line())
 
@@ -58,10 +64,12 @@ class i3Wrapper:
         return line
 
     def __mpd_connect(self):
-        """Try to connect to MPD."""
-        self.client.connect(host=self.host, port=self.port)
-        if self.password:
-            self.client.password(self.password)
+        """Try to connect to an MPD instance on a specified socket."""
+        self.client = MPDClient()
+        try:
+            self.client.connect(host=self.host, port=self.port)
+        except ConnectionRefusedError:
+            pass
 
     def mpd_status(self):
         """Insert a part with info about MPD's current status."""
@@ -69,23 +77,10 @@ class i3Wrapper:
         try:
             song = self.client.currentsong()
             status = self.client.status()["state"]
-        except ConnectionError:
-            # not connected last call (e.g. MPD just started): try to
-            # connect again to figure out exact issue
-            try:
-                self.__mpd_connect()
-                song = self.client.currentsong()
-                status = self.client.status()["state"]
-            except SocketError:
-                # MPD isn't running or configuration was wrong -- assume
-                # off
-                self.insert_part(self.form_part(self.text_off, self.color_off))
-                return
-            except CommandError:
-                # TODO: likely triggered by incorrect password, but I
-                # dunno for sure
-                self.insert_part(self.form_part("MPD: failed to authenticate!", self.color_error))
-                return
+        except:
+            self.__mpd_connect()
+            self.insert_part(self.form_part(self.text_off, self.color_error))
+            return
 
         # get info about song (to use in formatting)
         info = {}
@@ -152,17 +147,13 @@ class i3Wrapper:
     def insert_part(self, part, pos=0):
         self.line.insert(pos, part)
 
-    def print_line(self, line):
-        """Print to stdout & flush the buffer."""
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
-
     def start(self):
         while True:
             # get next line & parse it as JSON
             self.line, prefix = self.get_json()
 
-            # run insertion methods
+            # run insertion functions
+            # note that they must be in a certain order!
             self.alsa_color()
             self.mpd_status()
 
