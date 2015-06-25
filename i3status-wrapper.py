@@ -82,6 +82,20 @@ class i3Wrapper:
             self.insert_part(self.form_part(self.text_off, self.color_error))
             return
 
+        # set colour & format based on MPD status
+        if status == "play":
+            text = self.text_play
+            color = self.color_play
+        elif status == "pause":
+            text = self.text_pause
+            color = self.color_pause
+        elif status == "stop":
+            # if we're stopped, exit before trying to get info
+            text = self.text_stop
+            color = self.color_stop
+            self.insert_part(self.form_part(text, color))
+            return
+
         # get info about song (to use in formatting)
         info = {}
         info["file"] = basename(song["file"])
@@ -99,17 +113,6 @@ class i3Wrapper:
             # song has no title set, so use filename instead
             info["title"] = ""
             info["name"] = info["file"]
-
-        # set colour & format based on MPD status
-        if status == "play":
-            text = self.text_play
-            color = self.color_play
-        elif status == "pause":
-            text = self.text_pause
-            color = self.color_pause
-        elif status == "stop":
-            text = self.text_stop
-            color = self.color_stop
 
         # replace format parts with actual values
         # e.g. {artist} -> info["artist"]
